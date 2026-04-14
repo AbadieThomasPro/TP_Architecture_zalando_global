@@ -1,0 +1,126 @@
+services:
+  catalog-db:
+    image: postgres:16-alpine
+    container_name: catalog-db
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: catalog_db
+      POSTGRES_USER: catalog_user
+      POSTGRES_PASSWORD: catalog_password
+    volumes:
+      - catalog_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U catalog_user -d catalog_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  customer-db:
+    image: postgres:16-alpine
+    container_name: customer-db
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_DB: customer_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - customer_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d customer_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  order-db:
+    image: postgres:16-alpine
+    container_name: order-db
+    ports:
+      - "5434:5432"
+    environment:
+      POSTGRES_DB: order_service_db
+      POSTGRES_USER: order_service_user
+      POSTGRES_PASSWORD: order_service_password
+    volumes:
+      - order_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U order_service_user -d order_service_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  catalog-service:
+    build:
+      context: ./catalog-service
+    container_name: catalog-service
+    command: sh -c "python manage.py migrate && python manage.py seed_catalog && python manage.py runserver 0.0.0.0:8000"
+    ports:
+      - "8000:8000"
+    environment:
+      DJANGO_SECRET_KEY: django-insecure-change-me
+      DJANGO_DEBUG: "1"
+      DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1,catalog-service
+      DB_NAME: catalog_db
+      DB_USER: catalog_user
+      DB_PASSWORD: catalog_password
+      DB_HOST: catalog-db
+      DB_PORT: "5432"
+    depends_on:
+      catalog-db:
+        condition: service_healthy
+    volumes:
+      - ./catalog-service:/app
+
+  customer-service:
+    build:
+      context: ./customer-service
+    container_name: customer-service
+    command: sh -c "python manage.py migrate && python manage.py runserver 0.0.0.0:8000"
+    ports:
+      - "8001:8000"
+    environment:
+      DB_NAME: customer_db
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_HOST: customer-db
+      DB_PORT: "5432"
+    depends_on:
+      customer-db:
+        condition: service_healthy
+    volumes:
+      - ./customer-service:/app
+
+  order-service:
+    build:
+      context: ./order-service
+    container_name: order-service
+    command: sh -c "python manage.py migrate && python manage.py runserver 0.0.0.0:8000"
+    ports:
+      - "8002:8000"
+    environment:
+      SECRET_KEY: change-me
+      DEBUG: "1"
+      ALLOWED_HOSTS: localhost,127.0.0.1,order-service
+      POSTGRES_DB: order_service_db
+      POSTGRES_USER: order_service_user
+      POSTGRES_PASSWORD: order_service_password
+      POSTGRES_HOST: order-db
+      POSTGRES_PORT: "5432"
+      CUSTOMER_SERVICE_URL: http://customer-service:8000
+      CATALOG_SERVICE_URL: http://catalog-service:8000
+      USE_MOCK_SERVICES: "0"
+    depends_on:
+      order-db:
+        condition: service_healthy
+      customer-service:
+        condition: service_started
+      catalog-service:
+        condition: service_started
+    volumes:
+      - ./order-service:/app
+
+volumes:
+  catalog_postgres_data:
+  customer_postgres_data:
+  order_postgres_data:
