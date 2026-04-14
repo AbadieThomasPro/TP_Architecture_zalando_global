@@ -1,9 +1,10 @@
 from rest_framework import generics
+from django.http import JsonResponse
 from .models import Customer, Address
 from .serializers import CustomerSerializer, AddressSerializer, AddressCreateSerializer
 
 
-class CustomerListCreateView(generics.ListCreateAPIView):
+class CustomerListView(generics.ListCreateAPIView):
     serializer_class = CustomerSerializer
 
     def get_queryset(self):
@@ -25,10 +26,12 @@ class CustomerAddressesView(generics.ListAPIView):
     serializer_class = AddressSerializer
 
     def get_queryset(self):
-        customer_id = self.kwargs["pk"]
-        return Address.objects.filter(customer_id=customer_id)
+        return Address.objects.filter(customer_id=self.kwargs["pk"])
 
 
 class AddressCreateView(generics.CreateAPIView):
     queryset = Address.objects.all()
     serializer_class = AddressCreateSerializer
+
+def health_check(request):
+    return JsonResponse({"status": "ok"})
