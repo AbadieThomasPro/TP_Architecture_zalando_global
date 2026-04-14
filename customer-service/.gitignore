@@ -1,0 +1,85 @@
+# .gitignore — Django + Docker + venv
+
+```gitignore
+# =========================
+# Python
+# =========================
+__pycache__/
+*.py[cod]
+*$py.class
+
+# =========================
+# Virtual environment
+# =========================
+venv/
+.venv/
+env/
+ENV/
+
+# =========================
+# Django
+# =========================
+*.log
+*.pot
+*.pyc
+db.sqlite3
+media/
+staticfiles/
+
+# =========================
+# Environment variables
+# =========================
+.env
+.env.*
+*.env
+
+# =========================
+# VS Code / IDE
+# =========================
+.vscode/
+.idea/
+
+# =========================
+# OS files
+# =========================
+.DS_Store
+Thumbs.db
+
+# =========================
+# Docker
+# =========================
+*.pid
+*.seed
+*.pid.lock
+
+# =========================
+# PostgreSQL (si fichiers locaux)
+# =========================
+*.sql
+*.dump
+
+# =========================
+# Migrations (optionnel)
+# ⚠️ Pour un TP, tu peux les garder
+# =========================
+# customers/migrations/*
+# !customers/migrations/__init__.py
+
+# =========================
+# Fixtures (optionnel)
+# ⚠️ À garder si demandé dans le rendu
+# =========================
+# customers/fixtures/*.json
+
+# =========================
+# Tests / coverage
+# =========================
+.coverage
+htmlcov/
+
+# =========================
+# Misc
+# =========================
+*.swp
+*.swo
+```
