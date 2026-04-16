@@ -50,6 +50,23 @@ services:
       timeout: 5s
       retries: 10
 
+  analytics-db:
+    image: postgres:16-alpine
+    container_name: analytics-db
+    ports:
+      - "5435:5432"
+    environment:
+      POSTGRES_DB: analytics_db
+      POSTGRES_USER: analytics_user
+      POSTGRES_PASSWORD: analytics_password
+    volumes:
+      - analytics_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U analytics_user -d analytics_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   catalog-service:
     build:
       context: ./catalog-service
@@ -123,6 +140,28 @@ services:
     volumes:
       - ./order-service:/app
 
+  analytics-service:
+    build:
+      context: ./analytics-service
+    container_name: analytics-service
+    command: sh -c "python manage.py migrate && python manage.py runserver 0.0.0.0:8000"
+    ports:
+      - "8003:8000"
+    environment:
+      DJANGO_SECRET_KEY: django-insecure-change-me
+      DJANGO_DEBUG: "1"
+      DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1,analytics-service
+      DB_NAME: analytics_db
+      DB_USER: analytics_user
+      DB_PASSWORD: analytics_password
+      DB_HOST: analytics-db
+      DB_PORT: "5432"
+    depends_on:
+      analytics-db:
+        condition: service_healthy
+    volumes:
+      - ./analytics-service:/app
+
   frontend:
     build:
       context: ./frontend
@@ -145,4 +184,5 @@ volumes:
   catalog_postgres_data:
   customer_postgres_data:
   order_postgres_data:
+  analytics_postgres_data:
   frontend_node_modules:

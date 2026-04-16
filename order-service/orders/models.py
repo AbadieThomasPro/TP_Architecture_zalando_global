@@ -3,6 +3,12 @@ from decimal import Decimal
 from django.core.validators import MinValueValidator
 from django.db import models
 
+class OrderProduct(models.Model):
+    product_id = models.PositiveIntegerField(unique=True)
+    name = models.CharField(max_length=255)
+    category_name = models.CharField(max_length=120)
+    current_price = models.DecimalField(max_digits=10, decimal_places=2)
+    is_active = models.BooleanField(default=True)
 
 class Order(models.Model):
     class Status(models.TextChoices):

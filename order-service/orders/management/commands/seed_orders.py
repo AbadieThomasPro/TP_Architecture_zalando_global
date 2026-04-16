@@ -4,30 +4,30 @@ from decimal import Decimal
 from django.core.management.base import BaseCommand
 from django.db import connection
 
-from orders.models import Order, OrderLine
+from orders.models import Order, OrderLine, OrderProduct
 
 
 class Command(BaseCommand):
-    help = "Réinitialise la base order et génère des commandes réalistes avec total_amount à 0"
+    help = "Réinitialise la base order et génère des produits + commandes réalistes"
 
     def add_arguments(self, parser):
         parser.add_argument(
             "--customers",
             type=int,
             default=10000,
-            help="Nombre maximum d'IDs clients disponibles",
+            help="Nombre max d'IDs clients disponibles",
         )
         parser.add_argument(
             "--products",
             type=int,
             default=100000,
-            help="Nombre maximum d'IDs produits disponibles",
+            help="Nombre max d'IDs produits disponibles",
         )
         parser.add_argument(
             "--active-products",
             type=int,
             default=12000,
-            help="Nombre de produits qui auront au moins 1 achat",
+            help="Nombre de produits ayant au moins un achat",
         )
         parser.add_argument(
             "--max-orders",
@@ -39,7 +39,7 @@ class Command(BaseCommand):
             "--batch-size",
             type=int,
             default=1000,
-            help="Taille des batchs pour bulk_create",
+            help="Taille des batchs",
         )
 
     def handle(self, *args, **options):
@@ -59,23 +59,33 @@ class Command(BaseCommand):
 
         with connection.cursor() as cursor:
             cursor.execute(
-                "TRUNCATE TABLE orders_orderline, orders_order RESTART IDENTITY CASCADE;"
+                """
+                TRUNCATE TABLE
+                    orders_orderline,
+                    orders_order,
+                    orders_orderproduct
+                RESTART IDENTITY CASCADE;
+                """
             )
 
         self.stdout.write(self.style.SUCCESS("Tables vidées, IDs remis à zéro."))
 
-        self.stdout.write("Construction de la répartition des achats par produit...")
+        self.stdout.write("Création des produits locaux dans order-service...")
+        self.create_order_products(products_count=products_count, batch_size=5000)
+
+        self.stdout.write("Construction de la répartition des achats...")
         product_purchase_targets = self.build_product_purchase_targets(
             products_count=products_count,
             active_products=active_products,
             max_orders=max_orders,
         )
 
-        total_lines_to_create = sum(product_purchase_targets.values())
+        total_orders = sum(product_purchase_targets.values())
         self.stdout.write(
             self.style.SUCCESS(
+                f"{products_count} produits créés dans OrderProduct, "
                 f"{len(product_purchase_targets)} produits auront des achats, "
-                f"pour un total de {total_lines_to_create} commandes."
+                f"pour un total de {total_orders} commandes."
             )
         )
 
@@ -88,14 +98,35 @@ class Command(BaseCommand):
 
         self.stdout.write(self.style.SUCCESS("Seed terminé."))
 
+    def create_order_products(self, products_count, batch_size):
+        products_buffer = []
+
+        for product_id in range(1, products_count + 1):
+            category_name = self.get_category_name(product_id)
+            product_name = self.generate_catalog_product_name(product_id)
+            current_price = self.generate_price_for_product(product_id)
+            is_active = random.random() < 0.9
+
+            products_buffer.append(
+                OrderProduct(
+                    product_id=product_id,
+                    name=product_name,
+                    category_name=category_name,
+                    current_price=current_price,
+                    is_active=is_active,
+                )
+            )
+
+            if len(products_buffer) >= batch_size:
+                OrderProduct.objects.bulk_create(products_buffer, batch_size=batch_size)
+                self.stdout.write(f"{product_id}/{products_count} produits créés...")
+                products_buffer = []
+
+        if products_buffer:
+            OrderProduct.objects.bulk_create(products_buffer, batch_size=batch_size)
+            self.stdout.write(f"{products_count}/{products_count} produits créés...")
+
     def build_product_purchase_targets(self, products_count, active_products, max_orders):
-        """
-        Répartition réaliste :
-        - beaucoup de produits avec peu d'achats
-        - certains avec volume moyen
-        - quelques best-sellers
-        Le total est limité à max_orders.
-        """
         chosen_products = random.sample(range(1, products_count + 1), active_products)
         random.shuffle(chosen_products)
 
@@ -130,18 +161,23 @@ class Command(BaseCommand):
 
     def generate_orders_and_lines(self, product_purchase_targets, customers_count, batch_size):
         statuses = [
-            "draft",
-            "confirmed",
-            "cancelled",
+            Order.Status.DRAFT,
+            Order.Status.CONFIRMED,
+            Order.Status.CANCELLED,
         ]
         weights = [10, 75, 15]
+
+        products_map = {
+            product.product_id: product
+            for product in OrderProduct.objects.filter(product_id__in=product_purchase_targets.keys())
+        }
 
         orders_buffer = []
         line_payloads_buffer = []
         total_created_orders = 0
 
         for product_id, purchase_count in product_purchase_targets.items():
-            product_name = self.generate_catalog_product_name(product_id)
+            product = products_map[product_id]
 
             for _ in range(purchase_count):
                 customer_id = random.randint(1, customers_count)
@@ -155,14 +191,14 @@ class Command(BaseCommand):
                     )
                 )
 
-                unit_price = self.generate_price_for_product(product_id)
                 quantity = 1
+                unit_price = product.current_price
                 line_total = unit_price * quantity
 
                 line_payloads_buffer.append(
                     {
-                        "product_id": product_id,
-                        "product_name": product_name,
+                        "product_id": product.product_id,
+                        "product_name": product.name,
                         "unit_price": unit_price,
                         "quantity": quantity,
                         "line_total": line_total,
@@ -205,7 +241,7 @@ class Command(BaseCommand):
         rng = random.Random(product_id)
         return Decimal(str(round(rng.uniform(5, 500), 2)))
 
-    def generate_catalog_product_name(self, product_id):
+    def get_category_name(self, product_id):
         category_names = [
             "Electronics",
             "Books",
@@ -259,6 +295,12 @@ class Command(BaseCommand):
             "Collectibles",
         ]
 
+        index = product_id - 1
+        return category_names[index % len(category_names)]
+
+    def generate_catalog_product_name(self, product_id):
+        category_name = self.get_category_name(product_id)
+
         adjectives = [
             "Premium",
             "Classic",
@@ -301,8 +343,7 @@ class Command(BaseCommand):
         ]
 
         index = product_id - 1
-        category_name = category_names[index % len(category_names)]
         adjective = adjectives[index % len(adjectives)]
         noun = nouns[index % len(nouns)]
 
-        return f"{adjective} {category_name} {noun}"
+        return f"{adjective} {category_name} {noun} {product_id}"
