@@ -18,11 +18,13 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'rest_framework',
     'drf_spectacular',
+    'corsheaders',
     'orders',
 ]
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'corsheaders.middleware.CorsMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -57,8 +59,8 @@ DATABASES = {
         'NAME': os.getenv('POSTGRES_DB', 'order_service_db'),
         'USER': os.getenv('POSTGRES_USER', 'order_service_user'),
         'PASSWORD': os.getenv('POSTGRES_PASSWORD', 'order_service_password'),
-        'HOST': os.getenv('POSTGRES_HOST', 'db'),
-        'PORT': os.getenv('POSTGRES_PORT', '5432'),
+        'HOST': os.getenv('POSTGRES_HOST', 'localhost'),
+        'PORT': os.getenv('POSTGRES_PORT', '5434'),
     }
 }
 
@@ -85,6 +87,15 @@ SPECTACULAR_SETTINGS = {
     'VERSION': '1.0.0',
     'SERVE_INCLUDE_SCHEMA': False,
 }
+
+CORS_ALLOWED_ORIGINS = [
+    'http://localhost:4000',
+    'http://localhost:3000',
+    'http://frontend:4000',
+    'http://127.0.0.1:4000',
+]
+
+CORS_ALLOW_CREDENTIALS = True
 
 CUSTOMER_SERVICE_URL = os.getenv('CUSTOMER_SERVICE_URL', 'http://customer-service:8000')
 CATALOG_SERVICE_URL = os.getenv('CATALOG_SERVICE_URL', 'http://catalog-service:8000')
