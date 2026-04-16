@@ -98,6 +98,41 @@ services:
       superset init &&
       superset run -h 0.0.0.0 -p 8088"
 
+  analytics-etl:
+    build:
+      context: ./analytics-etl
+    profiles: ["etl"]
+    environment:
+      CUSTOMER_DB_HOST: customer-db
+      CUSTOMER_DB_PORT: "5432"
+      CUSTOMER_DB_NAME: customer_db
+      CUSTOMER_DB_USER: postgres
+      CUSTOMER_DB_PASSWORD: postgres
+      CATALOG_DB_HOST: catalog-db
+      CATALOG_DB_PORT: "5432"
+      CATALOG_DB_NAME: catalog_db
+      CATALOG_DB_USER: catalog_user
+      CATALOG_DB_PASSWORD: catalog_password
+      ORDER_DB_HOST: order-db
+      ORDER_DB_PORT: "5432"
+      ORDER_DB_NAME: order_service_db
+      ORDER_DB_USER: order_service_user
+      ORDER_DB_PASSWORD: order_service_password
+      ANALYTICS_DB_HOST: analytics-db
+      ANALYTICS_DB_PORT: "5432"
+      ANALYTICS_DB_NAME: analytics_db
+      ANALYTICS_DB_USER: analytics_user
+      ANALYTICS_DB_PASSWORD: analytics_password
+    depends_on:
+      customer-db:
+        condition: service_healthy
+      catalog-db:
+        condition: service_healthy
+      order-db:
+        condition: service_healthy
+      analytics-db:
+        condition: service_healthy
+
   catalog-service:
     build:
       context: ./catalog-service
