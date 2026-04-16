@@ -22,6 +22,20 @@ class Order(models.Model):
         return f'Order #{self.pk}'
 
 
+class OrderProduct(models.Model):
+    order = models.ForeignKey(Order, related_name='order_products', on_delete=models.CASCADE)
+    product_id = models.PositiveIntegerField()
+
+    class Meta:
+        db_table = 'order_products'
+        constraints = [
+            models.UniqueConstraint(fields=['order', 'product_id'], name='unique_order_product'),
+        ]
+
+    def __str__(self):
+        return f'OrderProduct order={self.order_id} product={self.product_id}'
+
+
 class OrderLine(models.Model):
     order = models.ForeignKey(Order, related_name='items', on_delete=models.CASCADE)
     product_id = models.PositiveIntegerField()

@@ -3,7 +3,7 @@ from decimal import Decimal
 from rest_framework import serializers
 
 from .external_services import CatalogGateway, CustomerGateway, ExternalServiceError
-from .models import Order, OrderLine
+from .models import Order, OrderLine, OrderProduct
 
 
 class OrderLineReadSerializer(serializers.ModelSerializer):
@@ -79,6 +79,11 @@ class OrderCreateSerializer(serializers.Serializer):
         OrderLine.objects.bulk_create([
             OrderLine(order=order, **line_data)
             for line_data in lines_to_create
+        ])
+
+        OrderProduct.objects.bulk_create([
+            OrderProduct(order=order, product_id=product_id)
+            for product_id in {line_data['product_id'] for line_data in lines_to_create}
         ])
 
         order.refresh_from_db()
