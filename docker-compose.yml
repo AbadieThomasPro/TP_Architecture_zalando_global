@@ -50,6 +50,54 @@ services:
       timeout: 5s
       retries: 10
 
+  analytics-db:
+    image: postgres:16-alpine
+    container_name: analytics-db
+    ports:
+      - "5435:5432"
+    environment:
+      POSTGRES_DB: analytics_db
+      POSTGRES_USER: analytics_user
+      POSTGRES_PASSWORD: analytics_password
+    volumes:
+      - analytics_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U analytics_user -d analytics_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  superset:
+    image: apache/superset:latest
+    container_name: superset
+    ports:
+      - "8088:8088"
+    environment:
+      SUPERSET_SECRET_KEY: superset-dev-secret-key
+      SUPERSET_ADMIN_USERNAME: admin
+      SUPERSET_ADMIN_PASSWORD: admin
+      SUPERSET_ADMIN_FIRSTNAME: Admin
+      SUPERSET_ADMIN_LASTNAME: User
+      SUPERSET_ADMIN_EMAIL: admin@example.com
+    depends_on:
+      analytics-db:
+        condition: service_healthy
+    volumes:
+      - ./superset:/app/docker
+      - superset_home:/app/superset_home
+    command: >
+      /bin/sh -c "
+      python -m pip install --user psycopg2-binary &&
+      superset db upgrade &&
+      superset fab create-admin
+      --username $$SUPERSET_ADMIN_USERNAME
+      --firstname $$SUPERSET_ADMIN_FIRSTNAME
+      --lastname $$SUPERSET_ADMIN_LASTNAME
+      --email $$SUPERSET_ADMIN_EMAIL
+      --password $$SUPERSET_ADMIN_PASSWORD || true &&
+      superset init &&
+      superset run -h 0.0.0.0 -p 8088"
+
   catalog-service:
     build:
       context: ./catalog-service
@@ -142,4 +190,6 @@ volumes:
   catalog_postgres_data:
   customer_postgres_data:
   order_postgres_data:
+  analytics_postgres_data:
   frontend_node_modules:
+  superset_home:
