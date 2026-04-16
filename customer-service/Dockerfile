@@ -1,13 +1,14 @@
-FROM python:3.9
+FROM python:3.12-slim
 
 WORKDIR /app
 
-# Copie d'abord les dépendances pour tirer parti du cache
-COPY requirements.txt .
-RUN pip install -r requirements.txt
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends gcc libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
 
-# Copie le reste du projet
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
 COPY . .
 
-# Commande par défaut pour lancer le serveur
 CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]
