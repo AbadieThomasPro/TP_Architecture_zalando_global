@@ -487,3 +487,89 @@ FROM (
 WHERE o.id = totals.order_id;
 
 COMMIT;
+
+
+
+
+-----
+ROLLBACK;
+BEGIN;
+
+TRUNCATE TABLE order_products, orders_orderline, orders_order RESTART IDENTITY CASCADE;
+
+CREATE TEMP TABLE tmp_selected_customers AS
+SELECT
+    ROW_NUMBER() OVER (ORDER BY customer_id) AS rn,
+    customer_id
+FROM (
+    SELECT gs AS customer_id
+    FROM generate_series(1, 10000) AS gs
+    ORDER BY random()
+    LIMIT 9000
+) t;
+
+CREATE TEMP TABLE tmp_orders_seed AS
+SELECT
+    gs AS order_no,
+    CASE
+        WHEN gs <= 9000 THEN sc.customer_id
+        ELSE (
+            SELECT customer_id
+            FROM tmp_selected_customers
+            ORDER BY random()
+            LIMIT 1
+        )
+    END AS customer_id
+FROM generate_series(1, 20000) AS gs
+LEFT JOIN tmp_selected_customers sc
+    ON sc.rn = gs;
+
+INSERT INTO orders_order (customer_id, status, total_amount, created_at)
+SELECT
+    customer_id,
+    'confirmed',
+    0.00,
+    now()
+    - ((floor(random() * 180))::int || ' days')::interval
+    - ((floor(random() * 86400))::int || ' seconds')::interval
+FROM tmp_orders_seed
+ORDER BY order_no;
+
+CREATE TEMP TABLE tmp_line_seed AS
+SELECT
+    o.id AS order_id,
+    item_idx,
+    ((o.id * 7919 + item_idx * 4729) % 100000 + 1)::int AS product_id,
+    (1 + floor(random() * 4))::int AS quantity
+FROM orders_order o
+JOIN generate_series(1, 15) AS item_idx
+    ON item_idx <= (1 + floor(random() * 15))::int;
+
+INSERT INTO orders_orderline (order_id, product_id, product_name, unit_price, quantity, line_total)
+SELECT
+    order_id,
+    product_id,
+    'Produit catalogue #' || product_id,
+    round((9.90 + ((product_id % 250) * 1.37))::numeric, 2) AS unit_price,
+    quantity,
+    round((round((9.90 + ((product_id % 250) * 1.37))::numeric, 2) * quantity)::numeric, 2) AS line_total
+FROM tmp_line_seed;
+
+INSERT INTO order_products (order_id, product_id)
+SELECT DISTINCT
+    order_id,
+    product_id
+FROM tmp_line_seed;
+
+UPDATE orders_order o
+SET total_amount = totals.total_amount
+FROM (
+    SELECT
+        order_id,
+        round(sum(line_total)::numeric, 2) AS total_amount
+    FROM orders_orderline
+    GROUP BY order_id
+) totals
+WHERE o.id = totals.order_id;
+
+COMMIT;
