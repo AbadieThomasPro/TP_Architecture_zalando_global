@@ -24,64 +24,80 @@ def fetch_all(conn, query: str):
 
 def create_target_schema(conn):
     ddl = """
-    CREATE TABLE IF NOT EXISTS pays (
-        id BIGSERIAL PRIMARY KEY,
-        nom VARCHAR(100) NOT NULL UNIQUE
+    DROP TABLE IF EXISTS commandes CASCADE;
+    DROP TABLE IF EXISTS dates CASCADE;
+    DROP TABLE IF EXISTS produits CASCADE;
+    DROP TABLE IF EXISTS categories CASCADE;
+    DROP TABLE IF EXISTS pays CASCADE;
+
+    CREATE TABLE IF NOT EXISTS dim_customer (
+        customer_id BIGINT PRIMARY KEY,
+        first_name VARCHAR(100) NOT NULL,
+        last_name VARCHAR(100) NOT NULL,
+        email VARCHAR(254) NOT NULL,
+        phone VARCHAR(20) NOT NULL,
+        is_active BOOLEAN NOT NULL,
+        country VARCHAR(100) NOT NULL,
+        city VARCHAR(100) NOT NULL
     );
 
-    CREATE TABLE IF NOT EXISTS categories (
-        id BIGINT PRIMARY KEY,
-        nom VARCHAR(120) NOT NULL,
-        slug VARCHAR(140) NOT NULL UNIQUE
+    CREATE TABLE IF NOT EXISTS dim_category (
+        category_id BIGINT PRIMARY KEY,
+        category_name VARCHAR(120) NOT NULL,
+        category_slug VARCHAR(140) NOT NULL UNIQUE
     );
 
-    CREATE TABLE IF NOT EXISTS produits (
-        id BIGINT PRIMARY KEY,
-        categorie_id BIGINT NOT NULL REFERENCES categories(id),
-        nom VARCHAR(255) NOT NULL,
+    CREATE TABLE IF NOT EXISTS dim_product (
+        product_id BIGINT PRIMARY KEY,
+        product_name VARCHAR(255) NOT NULL,
         slug VARCHAR(255) NOT NULL UNIQUE,
-        description TEXT NOT NULL DEFAULT '',
-        prix NUMERIC(10, 2) NOT NULL,
-        stock INTEGER NOT NULL,
-        actif BOOLEAN NOT NULL
+        category_id BIGINT NOT NULL REFERENCES dim_category(category_id),
+        category_name VARCHAR(120) NOT NULL,
+        is_active BOOLEAN NOT NULL
     );
 
-    CREATE TABLE IF NOT EXISTS dates (
-        id BIGINT PRIMARY KEY,
-        date_heure TIMESTAMPTZ NOT NULL UNIQUE,
-        annee INTEGER NOT NULL,
-        mois INTEGER NOT NULL,
-        jour INTEGER NOT NULL,
-        heure INTEGER NOT NULL,
-        minute INTEGER NOT NULL
+    CREATE TABLE IF NOT EXISTS dim_date (
+        date_id BIGINT PRIMARY KEY,
+        date TIMESTAMPTZ NOT NULL UNIQUE,
+        day INTEGER NOT NULL,
+        month INTEGER NOT NULL,
+        month_name VARCHAR(20) NOT NULL,
+        quarter INTEGER NOT NULL,
+        year INTEGER NOT NULL
     );
 
-    CREATE TABLE IF NOT EXISTS commandes (
-        id BIGSERIAL PRIMARY KEY,
-        source_order_id BIGINT NOT NULL,
-        source_order_line_id BIGINT NOT NULL UNIQUE,
-        customer_id BIGINT NOT NULL,
-        statut VARCHAR(20) NOT NULL,
-        quantite INTEGER NOT NULL,
-        prix_unitaire NUMERIC(10, 2) NOT NULL,
-        montant_ligne NUMERIC(10, 2) NOT NULL,
-        montant_commande NUMERIC(10, 2) NULL,
-        pays_id BIGINT NOT NULL REFERENCES pays(id),
-        produit_id BIGINT NOT NULL REFERENCES produits(id),
-        date_id BIGINT NOT NULL REFERENCES dates(id)
+    CREATE TABLE IF NOT EXISTS fact_order_lines (
+        fact_id BIGSERIAL PRIMARY KEY,
+        order_id BIGINT NOT NULL,
+        order_line_id BIGINT NOT NULL UNIQUE,
+        customer_id BIGINT NOT NULL REFERENCES dim_customer(customer_id),
+        product_id BIGINT NOT NULL REFERENCES dim_product(product_id),
+        category_id BIGINT NOT NULL REFERENCES dim_category(category_id),
+        date_id BIGINT NOT NULL REFERENCES dim_date(date_id),
+        country VARCHAR(100) NOT NULL,
+        quantity INTEGER NOT NULL,
+        unit_price NUMERIC(10, 2) NOT NULL,
+        line_total NUMERIC(10, 2) NOT NULL,
+        order_status VARCHAR(20) NOT NULL
     );
 
-    CREATE INDEX IF NOT EXISTS idx_produits_categorie_id
-        ON produits(categorie_id);
+    CREATE INDEX IF NOT EXISTS idx_dim_product_category_id
+        ON dim_product(category_id);
 
-    CREATE INDEX IF NOT EXISTS idx_commandes_pays_id
-        ON commandes(pays_id);
+    CREATE INDEX IF NOT EXISTS idx_fact_order_lines_customer_id
+        ON fact_order_lines(customer_id);
 
-    CREATE INDEX IF NOT EXISTS idx_commandes_produit_id
-        ON commandes(produit_id);
+    CREATE INDEX IF NOT EXISTS idx_fact_order_lines_product_id
+        ON fact_order_lines(product_id);
 
-    CREATE INDEX IF NOT EXISTS idx_commandes_date_id
-        ON commandes(date_id);
+    CREATE INDEX IF NOT EXISTS idx_fact_order_lines_category_id
+        ON fact_order_lines(category_id);
+
+    CREATE INDEX IF NOT EXISTS idx_fact_order_lines_date_id
+        ON fact_order_lines(date_id);
+
+    CREATE INDEX IF NOT EXISTS idx_fact_order_lines_country
+        ON fact_order_lines(country);
     """
     with conn.cursor() as cur:
         cur.execute(ddl)
@@ -93,11 +109,11 @@ def truncate_target(conn):
         cur.execute(
             """
             TRUNCATE TABLE
-                commandes,
-                dates,
-                produits,
-                categories,
-                pays
+                fact_order_lines,
+                dim_date,
+                dim_product,
+                dim_category,
+                dim_customer
             RESTART IDENTITY CASCADE
             """
         )
@@ -105,17 +121,35 @@ def truncate_target(conn):
 
 
 def date_key(dt: datetime) -> int:
-    truncated = dt.replace(second=0, microsecond=0)
-    return int(truncated.strftime("%Y%m%d%H%M"))
+    return int(dt.strftime("%Y%m%d%H%M%S"))
 
 
-def extract_customer_countries(customer_conn):
+def month_name(month: int) -> str:
+    names = {
+        1: "January",
+        2: "February",
+        3: "March",
+        4: "April",
+        5: "May",
+        6: "June",
+        7: "July",
+        8: "August",
+        9: "September",
+        10: "October",
+        11: "November",
+        12: "December",
+    }
+    return names[month]
+
+
+def extract_customer_dimension(customer_conn):
     rows = fetch_all(
         customer_conn,
         """
         WITH ranked_addresses AS (
             SELECT
                 customer_id,
+                city,
                 country,
                 ROW_NUMBER() OVER (
                     PARTITION BY customer_id
@@ -123,43 +157,63 @@ def extract_customer_countries(customer_conn):
                 ) AS rn
             FROM customers_address
         )
-        SELECT customer_id, country
-        FROM ranked_addresses
-        WHERE rn = 1
+        SELECT
+            c.id AS customer_id,
+            c.first_name,
+            c.last_name,
+            c.email,
+            c.phone,
+            c.is_active,
+            COALESCE(ra.country, 'Inconnu') AS country,
+            COALESCE(ra.city, 'Inconnue') AS city
+        FROM customers_customer c
+        LEFT JOIN ranked_addresses ra
+            ON ra.customer_id = c.id
+           AND ra.rn = 1
+        ORDER BY c.id
         """,
     )
-    return {row["customer_id"]: row["country"] for row in rows}
+    return rows
 
 
-def extract_catalog(catalog_conn):
-    categories = fetch_all(
+def extract_category_dimension(catalog_conn):
+    return fetch_all(
         catalog_conn,
         """
-        SELECT id, name, slug
+        SELECT id AS category_id, name AS category_name, slug AS category_slug
         FROM catalog_category
         ORDER BY id
         """,
     )
-    products = fetch_all(
+
+
+def extract_product_dimension(catalog_conn):
+    return fetch_all(
         catalog_conn,
         """
-        SELECT id, category_id, name, slug, description, price, stock, is_active
-        FROM catalog_product
-        ORDER BY id
+        SELECT
+            p.id AS product_id,
+            p.name AS product_name,
+            p.slug,
+            p.category_id,
+            c.name AS category_name,
+            p.is_active
+        FROM catalog_product p
+        JOIN catalog_category c
+            ON c.id = p.category_id
+        ORDER BY p.id
         """,
     )
-    return categories, products
 
 
-def extract_order_lines(order_conn):
+def extract_fact_source(order_conn):
     return fetch_all(
         order_conn,
         """
         SELECT
             o.id AS order_id,
             o.customer_id,
-            o.status,
-            o.total_amount,
+            o.status AS order_status,
             o.created_at,
             ol.id AS order_line_id,
             ol.product_id,
@@ -174,48 +228,68 @@ def extract_order_lines(order_conn):
     )
 
 
-def load_dimensions(target_conn, categories, products, customer_country_map, order_lines):
-    country_names = OrderedDict()
-    for country in customer_country_map.values():
-        country_names[country or "Inconnu"] = None
-
-    if not country_names:
-        country_names["Inconnu"] = None
-
+def load_dim_customer(target_conn, customers):
     with target_conn.cursor() as cur:
-        execute_values(
-            cur,
-            "INSERT INTO pays (nom) VALUES %s",
-            [(name,) for name in country_names.keys()],
-            page_size=1000,
-        )
-    target_conn.commit()
-
-    countries = fetch_all(target_conn, "SELECT id, nom FROM pays ORDER BY id")
-    country_id_by_name = {row["nom"]: row["id"] for row in countries}
-
-    with target_conn.cursor() as cur:
-        execute_values(
-            cur,
-            "INSERT INTO categories (id, nom, slug) VALUES %s",
-            [(row["id"], row["name"], row["slug"]) for row in categories],
-            page_size=1000,
-        )
         execute_values(
             cur,
             """
-            INSERT INTO produits (id, categorie_id, nom, slug, description, prix, stock, actif)
+            INSERT INTO dim_customer (
+                customer_id, first_name, last_name, email, phone, is_active, country, city
+            )
             VALUES %s
             """,
             [
                 (
-                    row["id"],
-                    row["category_id"],
-                    row["name"],
+                    row["customer_id"],
+                    row["first_name"],
+                    row["last_name"],
+                    row["email"],
+                    row["phone"],
+                    row["is_active"],
+                    row["country"],
+                    row["city"],
+                )
+                for row in customers
+            ],
+            page_size=1000,
+        )
+    target_conn.commit()
+
+
+def load_dim_category(target_conn, categories):
+    with target_conn.cursor() as cur:
+        execute_values(
+            cur,
+            """
+            INSERT INTO dim_category (category_id, category_name, category_slug)
+            VALUES %s
+            """,
+            [
+                (row["category_id"], row["category_name"], row["category_slug"])
+                for row in categories
+            ],
+            page_size=1000,
+        )
+    target_conn.commit()
+
+
+def load_dim_product(target_conn, products):
+    with target_conn.cursor() as cur:
+        execute_values(
+            cur,
+            """
+            INSERT INTO dim_product (
+                product_id, product_name, slug, category_id, category_name, is_active
+            )
+            VALUES %s
+            """,
+            [
+                (
+                    row["product_id"],
+                    row["product_name"],
                     row["slug"],
-                    row["description"] or "",
-                    row["price"],
-                    row["stock"],
+                    row["category_id"],
+                    row["category_name"],
                     row["is_active"],
                 )
                 for row in products
@@ -224,86 +298,77 @@ def load_dimensions(target_conn, categories, products, customer_country_map, ord
         )
     target_conn.commit()
 
+
+def load_dim_date(target_conn, fact_source_rows):
     unique_dates = OrderedDict()
-    for row in order_lines:
-        created_at = row["created_at"].replace(second=0, microsecond=0)
+    for row in fact_source_rows:
+        created_at = row["created_at"].replace(microsecond=0)
         unique_dates[date_key(created_at)] = created_at
 
-    if unique_dates:
-        with target_conn.cursor() as cur:
-            execute_values(
-                cur,
-                """
-                INSERT INTO dates (id, date_heure, annee, mois, jour, heure, minute)
-                VALUES %s
-                """,
-                [
-                    (
-                        key,
-                        dt,
-                        dt.year,
-                        dt.month,
-                        dt.day,
-                        dt.hour,
-                        dt.minute,
-                    )
-                    for key, dt in unique_dates.items()
-                ],
-                page_size=1000,
-            )
-        target_conn.commit()
-
-    return country_id_by_name
-
-
-def load_fact_orders(target_conn, order_lines, customer_country_map, country_id_by_name):
-    rows = []
-    fallback_country_id = country_id_by_name.get("Inconnu")
-
-    for row in order_lines:
-        created_at = row["created_at"].replace(second=0, microsecond=0)
-        country_name = customer_country_map.get(row["customer_id"], "Inconnu") or "Inconnu"
-        country_id = country_id_by_name.get(country_name, fallback_country_id)
-        rows.append(
-            (
-                row["order_id"],
-                row["order_line_id"],
-                row["customer_id"],
-                row["status"],
-                row["quantity"],
-                row["unit_price"],
-                row["line_total"],
-                row["total_amount"],
-                country_id,
-                row["product_id"],
-                date_key(created_at),
-            )
-        )
-
-    if rows:
-        with target_conn.cursor() as cur:
-            execute_values(
-                cur,
-                """
-                INSERT INTO commandes (
-                    source_order_id,
-                    source_order_line_id,
-                    customer_id,
-                    statut,
-                    quantite,
-                    prix_unitaire,
-                    montant_ligne,
-                    montant_commande,
-                    pays_id,
-                    produit_id,
-                    date_id
+    with target_conn.cursor() as cur:
+        execute_values(
+            cur,
+            """
+            INSERT INTO dim_date (date_id, date, day, month, month_name, quarter, year)
+            VALUES %s
+            """,
+            [
+                (
+                    key,
+                    dt,
+                    dt.day,
+                    dt.month,
+                    month_name(dt.month),
+                    ((dt.month - 1) // 3) + 1,
+                    dt.year,
                 )
-                VALUES %s
-                """,
-                rows,
-                page_size=1000,
+                for key, dt in unique_dates.items()
+            ],
+            page_size=1000,
+        )
+    target_conn.commit()
+
+
+def load_fact_order_lines(target_conn, fact_source_rows, customer_country_by_id, product_category_by_id):
+    with target_conn.cursor() as cur:
+        execute_values(
+            cur,
+            """
+            INSERT INTO fact_order_lines (
+                order_id,
+                order_line_id,
+                customer_id,
+                product_id,
+                category_id,
+                date_id,
+                country,
+                quantity,
+                unit_price,
+                line_total,
+                order_status
             )
-        target_conn.commit()
+            VALUES %s
+            """,
+            [
+                (
+                    row["order_id"],
+                    row["order_line_id"],
+                    row["customer_id"],
+                    row["product_id"],
+                    product_category_by_id[row["product_id"]],
+                    date_key(row["created_at"].replace(microsecond=0)),
+                    customer_country_by_id.get(row["customer_id"], "Inconnu"),
+                    row["quantity"],
+                    row["unit_price"],
+                    row["line_total"],
+                    row["order_status"],
+                )
+                for row in fact_source_rows
+                if row["product_id"] in product_category_by_id
+            ],
+            page_size=1000,
+        )
+    target_conn.commit()
 
 
 def main():
@@ -316,25 +381,35 @@ def main():
         create_target_schema(target_conn)
         truncate_target(target_conn)
 
-        customer_country_map = extract_customer_countries(customer_conn)
-        categories, products = extract_catalog(catalog_conn)
-        order_lines = extract_order_lines(order_conn)
+        customers = extract_customer_dimension(customer_conn)
+        categories = extract_category_dimension(catalog_conn)
+        products = extract_product_dimension(catalog_conn)
+        fact_source_rows = extract_fact_source(order_conn)
 
-        country_id_by_name = load_dimensions(
+        load_dim_customer(target_conn, customers)
+        load_dim_category(target_conn, categories)
+        load_dim_product(target_conn, products)
+        load_dim_date(target_conn, fact_source_rows)
+
+        customer_country_by_id = {
+            row["customer_id"]: row["country"] for row in customers
+        }
+        product_category_by_id = {
+            row["product_id"]: row["category_id"] for row in products
+        }
+        load_fact_order_lines(
             target_conn,
-            categories,
-            products,
-            customer_country_map,
-            order_lines,
+            fact_source_rows,
+            customer_country_by_id,
+            product_category_by_id,
         )
-        load_fact_orders(target_conn, order_lines, customer_country_map, country_id_by_name)
 
         print(
             "ETL termine: "
+            f"{len(customers)} clients, "
             f"{len(categories)} categories, "
             f"{len(products)} produits, "
-            f"{len(country_id_by_name)} pays, "
-            f"{len(order_lines)} lignes de commandes chargees."
+            f"{len(fact_source_rows)} lignes de commande chargees."
         )
     finally:
         customer_conn.close()
