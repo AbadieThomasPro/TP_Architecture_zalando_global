@@ -67,8 +67,25 @@ services:
       timeout: 5s
       retries: 10
 
+  superset-db:
+    image: postgres:16-alpine
+    container_name: superset-db
+    environment:
+      POSTGRES_DB: superset_db
+      POSTGRES_USER: superset_user
+      POSTGRES_PASSWORD: superset_password
+    volumes:
+      - superset_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U superset_user -d superset_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   superset:
-    image: apache/superset:latest
+    build:
+      context: ./superset
+      dockerfile: Dockerfile
     container_name: superset
     ports:
       - "8088:8088"
@@ -79,15 +96,17 @@ services:
       SUPERSET_ADMIN_FIRSTNAME: Admin
       SUPERSET_ADMIN_LASTNAME: User
       SUPERSET_ADMIN_EMAIL: admin@example.com
+      PYTHONPATH: /app/docker
     depends_on:
       analytics-db:
+        condition: service_healthy
+      superset-db:
         condition: service_healthy
     volumes:
       - ./superset:/app/docker
       - superset_home:/app/superset_home
     command: >
       /bin/sh -c "
-      python -m pip install --user psycopg2-binary &&
       superset db upgrade &&
       superset fab create-admin
       --username $$SUPERSET_ADMIN_USERNAME
@@ -226,5 +245,6 @@ volumes:
   customer_postgres_data:
   order_postgres_data:
   analytics_postgres_data:
+  superset_postgres_data:
   frontend_node_modules:
   superset_home:
